@@ -1,0 +1,6 @@
+{
+  "indexes": [
+    { "collectionGroup": "workQueue", "queryScope": "COLLECTION", "fields": [ { "fieldPath": "sector", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" } ] }
+  ],
+  "fieldOverrides": []
+}

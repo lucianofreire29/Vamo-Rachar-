@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Only the server may create or alter identity and membership records.
+    match /restaurants/{restaurantId}/staff/{staffUid} {
+      allow get: if signedIn() && request.auth.uid == staffUid;
+      allow list, write: if false;
+    }
+
+    match /restaurants/{restaurantId}/sessions/{sessionId}/participants/{participantId} {
+      allow get: if signedIn() && resource.data.authUid == request.auth.uid;
+      allow list, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
