@@ -569,3 +569,44 @@ exports.leaveSandboxWithoutConsumption = onCall(async (request) => {
     return { status: 'left' };
   });
 });
+
+exports.listSandboxPaymentsForReview = onCall(async (request) => {
+  requireEmulator();
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, sessionId } = request.data || {};
+  if (![restaurantId, sessionId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const staff = await restaurant.collection('staff').doc(request.auth.uid).get();
+  if (!staff.exists || staff.data().active !== true || !Array.isArray(staff.data().roles) || !staff.data().roles.some((role) => ['waiter', 'manager'].includes(role))) throw new HttpsError('permission-denied', 'Sem permissão para conferir pagamento.');
+  const results = await restaurant.collection('sessions').doc(sessionId).collection('paymentAttempts').where('status', '==', 'proof_submitted').limit(101).get();
+  if (results.size > 100) throw new HttpsError('resource-exhausted', 'Muitos pagamentos para consulta.');
+  return { payments: results.docs.map((doc) => {
+    const { participantId, consumptionCents, serviceCents, totalCents, status } = doc.data();
+    return { paymentId: doc.id, participantId, consumptionCents, serviceCents, totalCents, status };
+  }) };
+});
+
+exports.getSandboxPayment = onCall(async (request) => {
+  requireEmulator();
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, sessionId, paymentId } = request.data || {};
+  if (![restaurantId, sessionId, paymentId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const payment = await getFirestore().collection('restaurants').doc(restaurantId).collection('sessions').doc(sessionId).collection('paymentAttempts').doc(paymentId).get();
+  if (!payment.exists || payment.data().participantId !== request.auth.uid) throw new HttpsError('permission-denied', 'Sem acesso ao pagamento.');
+  const { consumptionCents, serviceCents, totalCents, status } = payment.data();
+  return { paymentId, consumptionCents, serviceCents, totalCents, status };
+});
+
+exports.listSessionParticipants = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, sessionId } = request.data || {};
+  if (![restaurantId, sessionId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const session = getFirestore().collection('restaurants').doc(restaurantId).collection('sessions').doc(sessionId);
+  return getFirestore().runTransaction(async (tx) => {
+    const [sessionDoc, requester] = await Promise.all([tx.get(session), tx.get(session.collection('participants').doc(request.auth.uid))]);
+    if (!sessionDoc.exists || sessionDoc.data().status !== 'open' || !requester.exists || requester.data().status !== 'active' || requester.data().authUid !== request.auth.uid) throw new HttpsError('permission-denied', 'Participante sem acesso à sessão.');
+    const participants = await tx.get(session.collection('participants').where('status', '==', 'active').limit(101));
+    if (participants.size > 100) throw new HttpsError('resource-exhausted', 'Muitos participantes; paginação necessária.');
+    return { participants: participants.docs.map((doc) => ({ participantId: doc.id, displayName: doc.data().displayName })) };
+  }, { readOnly: true });
+});

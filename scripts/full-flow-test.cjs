@@ -29,6 +29,10 @@ async function main() {
     const sessionId = opened.sessionId;
     await call(ana, 'joinTable', { restaurantId, tableId: '13', displayName: 'Ana' });
     await call(bruno, 'joinTable', { restaurantId, tableId: '13', displayName: 'Bruno' });
+    const participants = await call(ana, 'listSessionParticipants', { restaurantId, sessionId });
+    assert.equal(participants.participants.length, 2);
+    assert.deepEqual(participants.participants.find((p) => p.participantId === bruno.localId), { participantId: bruno.localId, displayName: 'Bruno' });
+    await call(kitchen, 'listSessionParticipants', { restaurantId, sessionId }, 403);
     await call(ana, 'createOrder', { restaurantId, sessionId, requestId: 'order', items: [{ menuItemId: 'fries', quantity: 1, inviteeIds: [bruno.localId] }] });
     const invitation = (await call(bruno, 'listInvitations', { restaurantId, sessionId })).invitations[0];
     assert.equal(invitation.amountCents, 1550);
@@ -43,15 +47,34 @@ async function main() {
     assert.equal(anaPayment.totalCents, 1705);
     const anaProof = { restaurantId, sessionId, paymentId: anaPayment.paymentId };
     await call(ana, 'submitSandboxProof', anaProof);
+    assert.equal((await call(ana, 'getSandboxPayment', anaProof)).status, 'proof_submitted');
+    await call(bruno, 'getSandboxPayment', anaProof, 403);
+    await call(kitchen, 'listSandboxPaymentsForReview', { restaurantId, sessionId }, 403);
+    const pending = await call(waiter, 'listSandboxPaymentsForReview', { restaurantId, sessionId });
+    assert.equal(pending.payments.length, 1);
+    assert.equal(pending.payments[0].paymentId, anaPayment.paymentId);
     await call(waiter, 'reviewSandboxPayment', { ...anaProof, approve: true });
+    assert.equal((await call(ana, 'getSandboxPayment', anaProof)).status, 'confirmed');
+    const remaining = await call(bruno, 'listSessionParticipants', { restaurantId, sessionId });
+    assert.equal(remaining.participants.length, 1);
+    assert.equal(remaining.participants[0].participantId, bruno.localId);
+    await call(ana, 'listSessionParticipants', { restaurantId, sessionId }, 403);
+    assert.equal((await call(waiter, 'listSandboxPaymentsForReview', { restaurantId, sessionId })).payments.length, 0);
     await call(waiter, 'closeSandboxTableSession', { restaurantId, sessionId }, 400);
     const brunoPayment = await call(bruno, 'startSandboxCheckout', { restaurantId, sessionId, requestId: 'bruno-payment', includeService: false });
     assert.equal(brunoPayment.totalCents, 1550);
     const brunoProof = { restaurantId, sessionId, paymentId: brunoPayment.paymentId };
     await call(bruno, 'submitSandboxProof', brunoProof);
-    await call(waiter, 'reviewSandboxPayment', { ...brunoProof, approve: true });
+    await call(waiter, 'reviewSandboxPayment', { ...brunoProof, approve: false });
+    await call(waiter, 'closeSandboxTableSession', { restaurantId, sessionId }, 400);
+    const retryPayment = await call(bruno, 'startSandboxCheckout', { restaurantId, sessionId, requestId: 'bruno-retry', includeService: false });
+    assert.notEqual(retryPayment.paymentId, brunoPayment.paymentId);
+    assert.equal(retryPayment.totalCents, 1550);
+    const retryProof = { restaurantId, sessionId, paymentId: retryPayment.paymentId };
+    await call(bruno, 'submitSandboxProof', retryProof);
+    await call(waiter, 'reviewSandboxPayment', { ...retryProof, approve: true });
     assert.equal((await call(waiter, 'closeSandboxTableSession', { restaurantId, sessionId })).status, 'closed');
-    console.log('Full split order, separate sandbox payments and table close passed.');
+    console.log('Full split order, rejected proof recovery, separate sandbox payments and table close passed.');
   } finally { await env.cleanup(); }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

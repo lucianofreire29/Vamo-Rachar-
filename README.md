@@ -83,3 +83,7 @@ Não existe upload real, integração financeira, verificação bancária, estor
 `closeSandboxTableSession` permite que garçom ou gestor encerre uma sessão simulada quando participantes estão pagos, pagamentos resolvidos e itens entregues, cancelados ou indisponíveis. Libera a mesa para uma nova sessão e é idempotente. Limitado ao emulador e a 100 participantes, pagamentos e pedidos e 100 itens por pedido. Existe saída simulada sem consumo, mas ainda não há tratamento completo de exceções financeiras; esses casos devem ser resolvidos antes do piloto.
 
 `leaveSandboxWithoutConsumption` recebe `restaurantId` e `sessionId` e permite que o participante saia quando todos os seus itens estão cancelados ou indisponíveis, ou quando não há itens. Divisões pendentes e consumo bloqueiam a saída. Limitada ao emulador; a regra para reingresso ainda precisa ser definida.
+
+`listSandboxPaymentsForReview` recebe `restaurantId` e `sessionId` e lista comprovantes simulados pendentes para garçom ou gestor, com limite de 100 sem paginação. `getSandboxPayment` recebe também `paymentId` e permite ao titular consultar o estado da tentativa. Ambas as operações são restritas ao emulador e não fornecem arquivos de comprovantes.
+
+`listSessionParticipants` recebe `restaurantId` e `sessionId` e lista os participantes ativos da mesma sessão para escolha de convidados, retornando somente identificador e nome de exibição. A consulta exige participante ativo, não inclui quem já saiu ou pagou e retorna erro acima de 100 participantes até que haja paginação.
