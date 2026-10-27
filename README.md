@@ -87,3 +87,7 @@ Não existe upload real, integração financeira, verificação bancária, estor
 `listSandboxPaymentsForReview` recebe `restaurantId` e `sessionId` e lista comprovantes simulados pendentes para garçom ou gestor, com limite de 100 sem paginação. `getSandboxPayment` recebe também `paymentId` e permite ao titular consultar o estado da tentativa. Ambas as operações são restritas ao emulador e não fornecem arquivos de comprovantes.
 
 `listSessionParticipants` recebe `restaurantId` e `sessionId` e lista os participantes ativos da mesma sessão para escolha de convidados, retornando somente identificador e nome de exibição. A consulta exige participante ativo, não inclui quem já saiu ou pagou e retorna erro acima de 100 participantes até que haja paginação.
+
+## API HTTP no Render para protótipo
+
+A API Node.js pode ser iniciada com `npm start --prefix functions`. Ela verifica tokens do Firebase e reutiliza as operações existentes. As instruções de configuração, credenciais e limitações estão em [Render para prototipação](docs/render-prototipo.md). Os pagamentos e o fechamento simulados continuam disponíveis apenas no emulador.

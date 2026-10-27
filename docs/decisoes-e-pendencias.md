@@ -7,3 +7,7 @@ O fluxo desejado é entrada automática pelo QR da mesa e nome, sem aprovação 
 ## Pagamento
 
 O cliente enviará comprovante e a equipe conferirá o recebimento no canal financeiro do restaurante antes de autorizar a baixa. O comprovante por si só não confirma pagamento. Upload, revisão, baixa e saída ainda precisam ser implementados; fornecedor e integração real permanecem pendentes.
+
+## Hospedagem durante o protótipo
+
+Usar Render gratuito para a API e Firebase gratuito para Authentication e Firestore na prototipação. A hospedagem para uso em restaurantes será escolhida futuramente; o Render não é a solução planejada para essa operação. Avaliar Supabase posteriormente.

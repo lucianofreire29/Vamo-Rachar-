@@ -10,10 +10,16 @@ exports.health = onRequest((request, response) => {
 });
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
-const { initializeApp } = require('firebase-admin/app');
+const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { createHash } = require('node:crypto');
-initializeApp();
+const adminOptions = {};
+if (process.env.FIREBASE_PROJECT_ID) adminOptions.projectId = process.env.FIREBASE_PROJECT_ID;
+if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  try { adminOptions.credential = cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)); }
+  catch { throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON inválido.'); }
+}
+initializeApp(adminOptions);
 
 function validId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value);
