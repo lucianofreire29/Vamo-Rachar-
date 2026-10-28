@@ -32,10 +32,10 @@ A API no Render ainda reutiliza handlers de Cloud Functions via `.run`. Não exi
 
 ### 3.1 Dados fictícios e identidade da equipe
 
-- [ ] Criar restaurante, mesa e cardápio de teste com campos e tipos documentados.
-- [ ] Criar usuário autenticado de equipe e vínculo `staff` por procedimento administrativo confiável, sem permitir autoatribuição de papel.
-- [ ] Separar identidade anônima do cliente de conta persistente da equipe; definir login e recuperação para funcionários.
-- [ ] Criar procedimento repetível de preparação/limpeza dos dados de teste, sem sobrescrever documentos existentes nem apagar dados de terceiros.
+- [x] Criar restaurante, mesa e cardápio de teste com campos e tipos documentados (`scripts/seed-prototipo.cjs` e `docs/arquitetura-backend.md`).
+- [x] Criar usuário autenticado de equipe e vínculo `staff` por procedimento administrativo confiável, sem permitir autoatribuição de papel.
+- [x] Separar identidade anônima do cliente de conta persistente da equipe; definir login e recuperação para funcionários.
+- [x] Criar procedimento repetível de preparação/limpeza dos dados de teste, sem sobrescrever documentos existentes nem apagar dados de terceiros.
 - [ ] Verificar regras e índices efetivamente publicados no projeto, preservando configurações existentes até revisão.
 
 **Conclusão:** abrir mesa, entrar como cliente, consultar cardápio, criar pedido e percorrer preparo/entrega pela API publicada, com IDs e contas fictícias, sem editar estados operacionais manualmente.
