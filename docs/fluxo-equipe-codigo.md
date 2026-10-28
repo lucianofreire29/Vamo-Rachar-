@@ -1,6 +1,6 @@
 # Proposta para discussão: operação do Vamo Rachar
 
-**Situação:** proposta para avaliação da equipe; há implementação parcial nesta branch, ainda não aprovada para a main.
+**Situação:** backend experimental implementado e testado na branch `proposta-fluxo-equipe`; ainda não aprovado para a main nem implantado no Render. O GitHub Actions passou, conforme confirmação de Luciano.
 **Responsável pela visão do produto:** Luciano
 **Preparação:** 28/10/2026
 **Objetivo:** apresentar como serão acessados o administrador, a praça, o bar e a cozinha e quais mudanças serão necessárias no backend.
@@ -32,12 +32,12 @@ flowchart LR
 | --- | --- | --- |
 | Administrador | Configurar produtos, preços, nomes, fotos, setores, disponibilidade e códigos da equipe | Firebase Authentication com verificação em duas etapas |
 | Praça/garçom | Abrir mesas, acompanhar a operação, retirar e entregar; solicitar cancelamentos autorizados | Tela compartilhada; código individual nas ações que exigem identificação |
-| Bar | Ver produtos enviados ao bar e atualizar seu preparo | Tela compartilhada; regra de acesso e ações que exigem código ainda a definir |
-| Cozinha | Ver produtos enviados à cozinha e atualizar seu preparo | Tela compartilhada; regra de acesso e ações que exigem código ainda a definir |
+| Bar | Ver produtos enviados ao bar e atualizar seu preparo | Tela compartilhada ativada pelo gerente com código; preparo sem login individual |
+| Cozinha | Ver produtos enviados à cozinha e atualizar seu preparo | Tela compartilhada ativada pelo gerente com código; preparo sem login individual |
 | Cliente | Entrar em mesa aberta, consultar cardápio, pedir, dividir e fechar sua comanda | QR e nome; identidade técnica anônima pode ser usada sem cadastro |
 | Gerente | Executar ações conforme suas permissões, inclusive cancelamentos autorizados | Código individual criado no administrador |
 
-O acesso administrativo precisa de uma identidade protegida. O acesso compartilhado das demais telas também precisa de proteção no dispositivo ou na sessão do estabelecimento. As opções serão escolhidas com a equipe; tela compartilhada não significa API pública sem validação.
+O acesso administrativo exige identidade Firebase com segundo fator e vínculo administrativo ativo. Cada tela compartilhada é ativada por um gerente com seu código e fica vinculada à identidade técnica do dispositivo. Na implementação experimental, a ativação dura 12 horas e pode ser revogada pelo administrador; esse prazo ainda será avaliado.
 
 ## 3. Fluxo do administrador
 
@@ -60,7 +60,7 @@ O acesso administrativo precisa de uma identidade protegida. O acesso compartilh
 | Hambúrguer | R$ 32,00 | Desmarcado | Marcado | Entra na fila da cozinha |
 | Produto preparado pelos dois setores | R$ 30,00 | Marcado | Marcado | Aparece nas duas filas, com um único valor na comanda |
 
-Os valores são apenas exemplos. A equipe precisa definir se um produto sem nenhum setor marcado pode ser salvo e o que acontece com pedidos existentes ao mudar preço, destino ou disponibilidade. O preço de pedidos já confirmados deve permanecer congelado.
+Os valores são apenas exemplos. Na implementação experimental, o cadastro exige pelo menos um setor. Preço e destinos são registrados no momento do pedido; alterações posteriores no cardápio não alteram o item já criado.
 
 ## 4. Abertura da mesa e entrada do cliente
 
@@ -87,7 +87,7 @@ A identidade anônima usada tecnicamente pelo Firebase não exige que o cliente 
 
 ### Produto enviado aos dois setores
 
-A proposta requer uma tarefa ou registro de andamento **por setor**. Se o bar ficar pronto antes da cozinha, sua situação deve poder ser acompanhada sem marcar a parte da cozinha como pronta. O item continua sendo um único consumo na comanda e não pode ser cobrado duas vezes.
+A implementação na branch cria um registro de andamento **por setor**. Se o bar ficar pronto antes da cozinha, sua situação deve poder ser acompanhada sem marcar a parte da cozinha como pronta. O item continua sendo um único consumo na comanda e não pode ser cobrado duas vezes.
 
 **Decisão:** o garçom pode retirar e entregar cada parte separadamente. Ainda é preciso definir a apresentação na tela e a solução para indisponibilidade de apenas um dos setores.
 
@@ -99,7 +99,7 @@ A proposta requer uma tarefa ou registro de andamento **por setor**. Se o bar fi
 4. Se permitido, registra a ação, o responsável e o horário, e informa os setores afetados.
 5. O histórico do pedido e os lançamentos financeiros devem ser preservados; um cancelamento não pode apagar pagamentos ou ajustes anteriores.
 
-**Decisão:** após início de preparo ou entrega, somente o gerente poderá autorizar. A implementação inicial cancela por item e exige motivo. Ainda é preciso definir cancelamento do pedido inteiro e tratamento de pagamentos já confirmados. O cancelamento real ainda não foi implementado.
+**Implementado na branch:** antes do preparo, garçom ou gerente autorizado pode cancelar; após seu início ou após entrega, somente gerente. O cancelamento é por item, exige motivo, registra o responsável e atualiza as filas. Se houver participante com pagamento pendente ou confirmado, o cancelamento é bloqueado para revisão; estornos e ajustes ainda não foram implementados.
 
 ## 7. Comanda e pagamento
 
@@ -117,7 +117,7 @@ O código de funcionário é uma **credencial secreta**, não um CPF real nem ap
 
 - Criar, alterar, desativar e recuperar códigos por um procedimento administrativo autorizado.
 - Validar no servidor o código e a permissão para a ação e para o estabelecimento corretos.
-- Não guardar o código em texto puro nem colocá-lo em URLs, logs ou respostas da API. Escolher proteção adequada para códigos curtos, inclusive contra tentativas repetidas.
+- Não guardar o código em texto puro nem colocá-lo em URLs ou logs. A API retorna o código somente uma vez ao administrador, no momento da criação ou troca; ele deve ser mostrado e entregue ao funcionário de forma segura.
 - Prever bloqueio ou limitação de tentativas, auditoria e troca quando houver suspeita de exposição.
 - Registrar quem realizou ações sensíveis sem registrar o código informado.
 - Proteger as telas e os dispositivos compartilhados, além de definir a autenticação do administrador.
@@ -140,13 +140,11 @@ O cliente, as regras de divisão, a comanda individual e o trabalho já existent
 
 ## 10. Etapas propostas se a equipe aprovar
 
-1. **Fechar as decisões:** autenticador administrativo, proteção das telas compartilhadas, permissões por papel e ações que exigem código.
-2. **Corrigir e adaptar dados de teste:** remover senha padrão, evitar sobrescritas e criar sessões novas sem recuperar dados de ocupações anteriores.
-3. **Criar códigos e autorização:** cadastro administrativo, proteção dos códigos, validação no servidor e testes de tentativas e permissões.
-4. **Adaptar abertura de mesa e cancelamento:** registrar autor e eventos; cobrir estados e concorrência.
-5. **Ampliar produtos e filas:** bar, cozinha ou ambos, estados independentes por setor e cobrança única.
-6. **Testar os fluxos completos** nos emuladores e depois no ambiente de protótipo no Render, usando dados fictícios.
-7. **Desenhar e implementar as telas** após os protótipos aprovados no Figma; evoluir a simulação de pagamento e depois a conferência de comprovantes.
+1. **Revisar a implementação da branch:** produtos por setor, códigos, dispositivos, abertura, cancelamento e seed apenas de emulador foram implementados e testados localmente.
+2. **Validar segurança e custos:** confirmar o segundo fator real no plano Firebase, o primeiro administrador, recuperação, segredos e proteção das telas.
+3. **Concluir regras pendentes:** indisponibilidade parcial, cancelamento após pagamento, expiração dos códigos e demais permissões.
+4. **Planejar migração e testar no Render:** preservar dados existentes e testar fluxos com dados fictícios, depois da aprovação.
+5. **Desenhar e implementar as telas** após os protótipos aprovados no Figma; evoluir a simulação de pagamento e depois a conferência de comprovantes.
 
 Cada etapa deve ter contrato de API e testes de sucesso, permissão negada, repetição de requisição, isolamento entre restaurantes e concorrência quando aplicável. Mudanças só devem chegar à `main` após avaliação da equipe e verificações aprovadas.
 
