@@ -1,6 +1,7 @@
 const express = require('express');
 const { getAuth } = require('firebase-admin/auth');
 const functions = require('./index');
+const corsMiddleware = require('./middlewares/cors.middleware');
 
 const operations = [
   'openTableSession', 'joinTable', 'listMenu', 'createOrder', 'respondToShare',
@@ -15,6 +16,7 @@ const statusCodes = {
 };
 const app = express();
 app.disable('x-powered-by');
+app.use(corsMiddleware);
 app.use(express.json({ limit: '32kb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.post('/api/:operation', async (req, res) => {

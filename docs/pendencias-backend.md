@@ -73,7 +73,7 @@ A API no Render ainda reutiliza handlers de Cloud Functions via `.run`. Não exi
 - [ ] Evitar truncamento silencioso: algumas consultas usam limite de 100 sem paginação; outras retornam erro acima desse limite.
 - [ ] Definir atualização em tempo real ou consulta periódica, com custo de leitura controlado e escopo por papel/restaurante.
 - [ ] Se forem usados listeners diretos do Firestore, projetar dados e regras específicos; as regras atuais não liberam leitura geral da sessão.
-- [ ] Configurar CORS para as origens das interfaces Web quando elas forem conhecidas. A API atual não configura CORS.
+- [x] Configurar CORS para as origens das interfaces Web (`cors.middleware.js` configurado para ambiente local e variável `CORS_ORIGINS`).
 
 ## 5. Prioridade 3 — regras e exceções ainda incompletas
 
