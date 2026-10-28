@@ -1,6 +1,6 @@
 # Arquitetura do Back-end (Vamo-Rachar)
 
-Para preparar a integração com o repositório de Front-end e facilitar a manutenção, o código em `functions/src/` foi modularizado em camadas de responsabilidade única:
+Para preparar a integração com o front-end, foram criadas pastas para uma futura separação em camadas. A maior parte da lógica ainda está em `index.js` e `server.js`; os módulos indicados abaixo, exceto CORS, são estruturas a implementar:
 
 ## Estrutura de Diretórios (`functions/src/`)
 
@@ -20,11 +20,8 @@ repositórios (`cors.middleware.js`), validação de sessão/autenticação (`au
 
 - **`index.js` e `server.js`**: Ponto de exportação para o Firebase Cloud Functions e inicialização do servidor HTTP.
 
-## Dados Fictícios e Identidade (Seed do Protótipo)
+## Dados fictícios no emulador
 
-O script `scripts/seed-prototipo.cjs` prepara o ambiente de forma idempotente (sem sobrescrever sessões ativas ou apagar dados de terceiros):
+O script `scripts/seed-prototipo.cjs` cria apenas documentos ausentes de restaurante, cardápio e mesas em projeto `demo-*` com os emuladores de Authentication e Firestore ativos. Não cria conta, senha, funcionário ou sessão; documentos existentes são preservados. A equipe e abertura de mesa com códigos individuais estão pendentes de implementação. O script não aceita execução no Firebase real.
 
-- **Restaurante (`restaurants/restaurante-demo`)**: `{ name: string, active: boolean }`.
-- **Identidade da Equipe (`staff/staff-gerente-demo`)**: Conta persistente no Firebase Auth (`equipe@vamorachar.demo`), separada da autenticação anônima dos clientes. Vínculo administrativo com `{ active: boolean, roles: string[] }`.
-- **Cardápio (`menuItems/{id}`)**: `{ name: string, description: string, priceCents: number (int), sector: 'kitchen' | 'bar', available: boolean }`. Inclui `fries` (3600), `burger` (3200) e `lemonade` (1000).
-- **Mesas e Sessão (`tables/mesa-13`)**: Cria `mesa-01` a `mesa-20` e garante uma sessão aberta (`sessao-mesa-13-ativa`) vinculada em `activeSessionId`.
+Execução: `firebase emulators:exec --project demo-vamo-rachar --only auth,firestore "node scripts/seed-prototipo.cjs"` usando o Firebase CLI instalado no projeto. Não executa limpeza de dados.

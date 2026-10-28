@@ -177,7 +177,7 @@ async function main() {
     const transition = { restaurantId: 'test-session', itemId };
     assert.equal((await call(bar.idToken, { ...transition, action: 'start' }, 'transitionItem')).status, 403);
     assert.equal((await call(kitchen.idToken, { ...transition, action: 'ready' }, 'transitionItem')).status, 400);
-    assert.equal((await call(kitchen.idToken, { ...transition, action: 'start' }, 'transitionItem')).body.result.status, 'in_preparation');
+    assert.equal((await call(kitchen.idToken, { ...transition, sector: 'kitchen', action: 'start' }, 'transitionItem')).body.result.status, 'in_preparation');
     assert.equal((await call(kitchen.idToken, { ...transition, action: 'ready' }, 'transitionItem')).body.result.status, 'ready');
     const ready = await call(waiter.idToken, { restaurantId: 'test-session' }, 'listReadyItems');
     assert.ok(ready.body.result.items.some((i) => i.itemId === itemId));

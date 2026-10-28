@@ -4,10 +4,10 @@ const functions = require('./index');
 const corsMiddleware = require('./middlewares/cors.middleware');
 
 const operations = [
-  'openTableSession', 'joinTable', 'listMenu', 'createOrder', 'respondToShare',
+  'joinTable', 'listMenu', 'createOrder', 'respondToShare',
   'getShare', 'listInvitations', 'resolveRejectedSplit', 'listWorkQueue',
   'transitionItem', 'listReadyItems', 'markItemUnavailable', 'listMyOrderItems',
-  'listMyOrders', 'quoteCheckout', 'listSessionParticipants'
+  'listMyOrders', 'quoteCheckout', 'listSessionParticipants', 'saveAdminProduct', 'createEmployeeCode', 'disableEmployeeCode', 'listAdminProducts', 'listAdminEmployees', 'activateSharedDevice', 'openTableWithCode', 'cancelItemWithCode', 'rotateEmployeeCode', 'listAdminDevices', 'disableSharedDevice'
 ];
 const statusCodes = {
   'invalid-argument': 400, 'failed-precondition': 400, unauthenticated: 401,
@@ -17,6 +17,7 @@ const statusCodes = {
 const app = express();
 app.disable('x-powered-by');
 app.use(corsMiddleware);
+app.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 app.use(express.json({ limit: '32kb' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 app.post('/api/:operation', async (req, res) => {

@@ -1,6 +1,6 @@
 # Proposta para discussão: operação do Vamo Rachar
 
-**Situação:** proposta para avaliação da equipe, ainda não aprovada nem implementada.
+**Situação:** proposta para avaliação da equipe; há implementação parcial nesta branch, ainda não aprovada para a main.
 **Responsável pela visão do produto:** Luciano
 **Preparação:** 28/10/2026
 **Objetivo:** apresentar como serão acessados o administrador, a praça, o bar e a cozinha e quais mudanças serão necessárias no backend.
@@ -30,7 +30,7 @@ flowchart LR
 
 | Tela ou pessoa | Finalidade | Acesso previsto |
 | --- | --- | --- |
-| Administrador | Configurar produtos, preços, nomes, fotos, setores, disponibilidade e códigos da equipe | Área protegida por autenticador; método exato ainda a definir |
+| Administrador | Configurar produtos, preços, nomes, fotos, setores, disponibilidade e códigos da equipe | Firebase Authentication com verificação em duas etapas |
 | Praça/garçom | Abrir mesas, acompanhar a operação, retirar e entregar; solicitar cancelamentos autorizados | Tela compartilhada; código individual nas ações que exigem identificação |
 | Bar | Ver produtos enviados ao bar e atualizar seu preparo | Tela compartilhada; regra de acesso e ações que exigem código ainda a definir |
 | Cozinha | Ver produtos enviados à cozinha e atualizar seu preparo | Tela compartilhada; regra de acesso e ações que exigem código ainda a definir |
@@ -48,7 +48,7 @@ O acesso administrativo precisa de uma identidade protegida. O acesso compartilh
 5. Cria, desativa ou substitui códigos individuais de garçons e gerentes, associando-os às permissões autorizadas.
 6. A API valida as operações administrativas e mantém histórico das alterações relevantes.
 
-**Autenticador:** o pedido é proteger a área administrativa com ele. Ainda é necessário escolher o serviço e definir como a pessoa administradora entra e recupera acesso; não presumir que o código temporário, sozinho, seja toda a autenticação.
+**Autenticador:** Luciano escolheu Firebase Authentication com verificação em duas etapas. Ainda é necessário validar o método de segundo fator, a disponibilidade no plano gratuito e como provisionar e recuperar o acesso administrativo.
 
 **Foto:** a forma de armazenamento, os limites e as permissões de acesso ainda precisam ser escolhidos. Não pressupor um serviço pago para o protótipo.
 
@@ -89,7 +89,7 @@ A identidade anônima usada tecnicamente pelo Firebase não exige que o cliente 
 
 A proposta requer uma tarefa ou registro de andamento **por setor**. Se o bar ficar pronto antes da cozinha, sua situação deve poder ser acompanhada sem marcar a parte da cozinha como pronta. O item continua sendo um único consumo na comanda e não pode ser cobrado duas vezes.
 
-**Decisões para a equipe:** se o garçom pode retirar/entregar cada parte separadamente; como a tela indica que todas as partes foram concluídas; e o que acontece se apenas um dos setores declarar indisponibilidade.
+**Decisão:** o garçom pode retirar e entregar cada parte separadamente. Ainda é preciso definir a apresentação na tela e a solução para indisponibilidade de apenas um dos setores.
 
 ## 6. Cancelamento na praça
 
@@ -99,7 +99,7 @@ A proposta requer uma tarefa ou registro de andamento **por setor**. Se o bar fi
 4. Se permitido, registra a ação, o responsável e o horário, e informa os setores afetados.
 5. O histórico do pedido e os lançamentos financeiros devem ser preservados; um cancelamento não pode apagar pagamentos ou ajustes anteriores.
 
-**Ainda precisa ser decidido:** se o cancelamento é por item, pedido ou ambos; motivo obrigatório; quem pode cancelar após início do preparo ou entrega; necessidade de gerente para exceções; e como ficam estornos ou ajustes caso já exista pagamento. O cancelamento real ainda não foi implementado.
+**Decisão:** após início de preparo ou entrega, somente o gerente poderá autorizar. A implementação inicial cancela por item e exige motivo. Ainda é preciso definir cancelamento do pedido inteiro e tratamento de pagamentos já confirmados. O cancelamento real ainda não foi implementado.
 
 ## 7. Comanda e pagamento
 
@@ -122,7 +122,7 @@ O código de funcionário é uma **credencial secreta**, não um CPF real nem ap
 - Registrar quem realizou ações sensíveis sem registrar o código informado.
 - Proteger as telas e os dispositivos compartilhados, além de definir a autenticação do administrador.
 
-A proteção da sessão compartilhada, o tamanho do código, sua validade e o procedimento de recuperação ainda não foram escolhidos. Esses detalhes devem ser definidos e testados antes do piloto.
+Luciano escolheu que o gerente ative cada dispositivo compartilhado com seu código. Nesta implementação inicial, a ativação dura 12 horas e os códigos têm oito dígitos; esses parâmetros e o procedimento de recuperação ainda devem ser avaliados. Esses detalhes devem ser definidos e testados antes do piloto.
 
 ## 9. Comparação com o backend atual
 
@@ -136,7 +136,7 @@ A proteção da sessão compartilhada, o tamanho do código, sua validade e o pr
 | Dados de teste | O seed criado pelo Jean prepara restaurante, mesas, equipe e produtos | Revisar senha padrão, alterações em dados existentes e reutilização de sessão antes de executar em Firebase real |
 | Pagamento | Simulação só nos emuladores | Definir simulação HTTP e depois armazenamento e validação real do comprovante |
 
-O cliente, as regras de divisão, a comanda individual e o trabalho já existente serão aproveitados quando compatíveis com a decisão da equipe. A arquitetura, os contratos e os testes terão de ser ajustados para o novo fluxo; esta branch não implementa essas mudanças.
+O cliente, as regras de divisão, a comanda individual e o trabalho já existente serão aproveitados quando compatíveis com a decisão da equipe. A arquitetura, os contratos e os testes ainda precisam evoluir. Esta branch contém uma implementação parcial descrita em [implementacao-fluxo-proposta.md](implementacao-fluxo-proposta.md).
 
 ## 10. Etapas propostas se a equipe aprovar
 
@@ -152,10 +152,10 @@ Cada etapa deve ter contrato de API e testes de sucesso, permissão negada, repe
 
 ## 11. Perguntas para a reunião
 
-1. Qual serviço ou aplicativo autenticador será usado pelo administrador? Como será feita a entrada e a recuperação do acesso?
-2. Como cada tela compartilhada será autorizada para o estabelecimento? Quais ações precisam do código individual?
-3. Gerente e garçom terão as mesmas permissões de cancelamento em todos os estados do pedido?
-4. Quando um produto for para bar e cozinha, o garçom poderá retirar cada parte separadamente? Como tratar uma parte indisponível?
+1. Como será configurado o segundo fator do Firebase para o administrador e como será feita a recuperação do acesso?
+2. Quais ações além de abrir mesa e cancelar precisam do código individual? A ativação pelo gerente durará quanto tempo?
+3. Como tratar cancelamentos com pagamentos já confirmados, incluindo estornos e ajustes?
+4. Como tratar uma parte indisponível de um produto enviado ao bar e à cozinha?
 5. O código para conferir pagamento será de garçom, gerente ou de uma permissão específica?
 6. Quais regras de reingresso, encerramento e cancelamento serão adotadas no protótipo?
 

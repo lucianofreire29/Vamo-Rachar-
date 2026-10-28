@@ -90,6 +90,26 @@ exports.joinTable = onCall(async (request) => {
   });
 });
 
+// Produtos legados usam `sector`; novos produtos podem usar `sectors`.
+function productSectors(product) {
+  const sectors = product.sectors === undefined ? [product.sector] : product.sectors;
+  if (!Array.isArray(sectors) || !sectors.length || sectors.length > 2 || new Set(sectors).size !== sectors.length || sectors.some((s) => !['bar', 'kitchen'].includes(s))) return null;
+  return [...sectors].sort();
+}
+function queueId(itemId, sector, sectors) {
+  return sectors.length === 1 ? itemId : `${itemId}--${sector}`;
+}
+function queueEntries(tx, restaurant, itemId, sectors, fields) {
+  for (const sector of sectors) tx.create(restaurant.collection('workQueue').doc(queueId(itemId, sector, sectors)), { ...fields, itemId, sector, status: 'received', createdAt: FieldValue.serverTimestamp() });
+}
+function aggregateSectorStatus(statuses) {
+  const values = Object.values(statuses);
+  if (values.includes('unavailable')) return values.every((s) => s === 'unavailable') ? 'unavailable' : 'attention_required';
+  const order = ['received', 'in_preparation', 'ready', 'picked_up', 'delivered'];
+  if (!values.length || values.some((value) => !order.includes(value))) throw new HttpsError('failed-precondition', 'Estado de setor inválido.');
+  return order[Math.min(...values.map((value) => order.indexOf(value)))];
+}
+
 exports.listMenu = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
   const { restaurantId, sessionId } = request.data || {};
@@ -105,7 +125,10 @@ exports.listMenu = onCall(async (request) => {
   const items = await restaurant.collection('menuItems').where('available', '==', true).limit(100).get();
   return { items: items.docs.map((item) => {
     const data = item.data();
-    return { id: item.id, name: data.name, description: data.description || '', priceCents: data.priceCents, sector: data.sector };
+    const result = { id: item.id, name: data.name, description: data.description || '', priceCents: data.priceCents };
+    if (data.sectors !== undefined) result.sectors = data.sectors; else result.sector = data.sector;
+    if (data.photoUrl) result.photoUrl = data.photoUrl;
+    return result;
   }) };
 });
 
@@ -115,7 +138,7 @@ exports.createOrder = onCall(async (request) => {
   if (![restaurantId, sessionId, requestId].every(validId) || !Array.isArray(items) || !items.length || items.length > 20 || items.some((item) => !item || Object.keys(item).some((key) => !['menuItemId', 'quantity', 'notes', 'inviteeIds'].includes(key)) || !validId(item.menuItemId) || !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 99 || (item.notes !== undefined && (typeof item.notes !== 'string' || item.notes.length > 500)) || (item.inviteeIds !== undefined && (!Array.isArray(item.inviteeIds) || item.inviteeIds.length > 19 || item.inviteeIds.some((id) => !validId(id) || id === request.auth.uid) || new Set(item.inviteeIds).size !== item.inviteeIds.length)))) {
     throw new HttpsError('invalid-argument', 'Dados do pedido inválidos.');
   }
-  if (items.reduce((sum, item) => sum + (item.inviteeIds || []).length, 0) > 150) throw new HttpsError('invalid-argument', 'Convites demais no pedido.');
+  if (items.reduce((sum, item) => sum + (item.inviteeIds || []).length, 0) > 130) throw new HttpsError('invalid-argument', 'Convites demais no pedido.');
   const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
   const session = restaurant.collection('sessions').doc(sessionId);
   const participant = session.collection('participants').doc(request.auth.uid);
@@ -142,10 +165,10 @@ exports.createOrder = onCall(async (request) => {
     const snapshots = menu.map((snapshot, index) => {
       const product = snapshot.data();
       const item = normalized[index];
-      if (!snapshot.exists || product.available !== true || typeof product.name !== 'string' || !Number.isSafeInteger(product.priceCents) || product.priceCents < 0 || !['bar', 'kitchen'].includes(product.sector) || !Number.isSafeInteger(product.priceCents * item.quantity)) {
+      if (!snapshot.exists || product.available !== true || typeof product.name !== 'string' || !Number.isSafeInteger(product.priceCents) || product.priceCents < 0 || !productSectors(product) || !Number.isSafeInteger(product.priceCents * item.quantity)) {
         throw new HttpsError('failed-precondition', 'Produto indisponível ou inválido.');
       }
-      return { ...item, nameSnapshot: product.name, unitPriceCents: product.priceCents, totalCents: product.priceCents * item.quantity, sectorSnapshot: product.sector, status: item.inviteeIds.length ? 'awaiting_split' : 'received' };
+      return { ...item, nameSnapshot: product.name, unitPriceCents: product.priceCents, totalCents: product.priceCents * item.quantity, sectorSnapshot: productSectors(product)[0], sectorsSnapshot: productSectors(product), status: item.inviteeIds.length ? 'awaiting_split' : 'received' };
     });
     transaction.create(order, { createdByParticipantId: participant.id, createdAt: FieldValue.serverTimestamp() });
     for (const id of new Set([participant.id, ...invitedIds])) {
@@ -155,8 +178,8 @@ exports.createOrder = onCall(async (request) => {
       const itemRef = order.collection('items').doc();
       const { inviteeIds, ...storedItem } = item;
       const participantIds = [participant.id, ...inviteeIds].sort();
-      transaction.create(itemRef, { ...storedItem, participantIds });
-      if (storedItem.status === 'received') transaction.create(restaurant.collection('workQueue').doc(itemRef.id), { sessionId, tableId: sessionSnapshot.data().tableId, orderId: order.id, itemId: itemRef.id, sector: storedItem.sectorSnapshot, status: 'received', name: storedItem.nameSnapshot, quantity: storedItem.quantity, notes: storedItem.notes, createdAt: FieldValue.serverTimestamp() });
+      transaction.create(itemRef, { ...storedItem, participantIds, sectorStatuses: Object.fromEntries(storedItem.sectorsSnapshot.map((sector) => [sector, 'received'])) });
+      if (storedItem.status === 'received') queueEntries(transaction, restaurant, itemRef.id, storedItem.sectorsSnapshot, { sessionId, tableId: sessionSnapshot.data().tableId, orderId: order.id, name: storedItem.nameSnapshot, quantity: storedItem.quantity, notes: storedItem.notes });
       const base = Math.floor(item.totalCents / participantIds.length);
       const remainder = item.totalCents % participantIds.length;
       participantIds.forEach((id, index) => {
@@ -205,7 +228,7 @@ exports.respondToShare = onCall(async (request) => {
     if (ready) {
       const data = itemSnapshot.data();
       const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
-      transaction.create(restaurant.collection('workQueue').doc(itemId), { sessionId, tableId: sessionSnapshot.data().tableId, orderId, itemId, sector: data.sectorSnapshot, status: 'received', name: data.nameSnapshot, quantity: data.quantity, notes: data.notes, createdAt: FieldValue.serverTimestamp() });
+      queueEntries(transaction, restaurant, itemId, data.sectorsSnapshot || [data.sectorSnapshot], { sessionId, tableId: sessionSnapshot.data().tableId, orderId, name: data.nameSnapshot, quantity: data.quantity, notes: data.notes });
     }
     transaction.create(session.collection('events').doc(), { action: accept ? 'share_accepted' : 'share_rejected', actorId: request.auth.uid, targetId: itemId, occurredAt: FieldValue.serverTimestamp() });
     return { status, acceptanceStatus: desired };
@@ -271,8 +294,8 @@ exports.resolveRejectedSplit = onCall(async (request) => {
     if (newItemId) {
       const participantIds = [request.auth.uid, ...normalized].sort();
       for (const id of normalized) transaction.set(session.collection('participants').doc(id).collection('orderRefs').doc(orderId), { orderId, createdAt: FieldValue.serverTimestamp() }, { merge: true });
-      transaction.create(replacement, { menuItemId: old.menuItemId, quantity: old.quantity, notes: old.notes, nameSnapshot: old.nameSnapshot, unitPriceCents: old.unitPriceCents, totalCents: old.totalCents, sectorSnapshot: old.sectorSnapshot, status: normalized.length ? 'awaiting_split' : 'received', participantIds, previousItemId: itemId });
-      if (!normalized.length) transaction.create(getFirestore().collection('restaurants').doc(restaurantId).collection('workQueue').doc(replacement.id), { sessionId, tableId: sessionDoc.data().tableId, orderId, itemId: replacement.id, sector: old.sectorSnapshot, status: 'received', name: old.nameSnapshot, quantity: old.quantity, notes: old.notes, createdAt: FieldValue.serverTimestamp() });
+      transaction.create(replacement, { menuItemId: old.menuItemId, quantity: old.quantity, notes: old.notes, nameSnapshot: old.nameSnapshot, unitPriceCents: old.unitPriceCents, totalCents: old.totalCents, sectorSnapshot: old.sectorSnapshot, sectorsSnapshot: old.sectorsSnapshot || [old.sectorSnapshot], sectorStatuses: Object.fromEntries((old.sectorsSnapshot || [old.sectorSnapshot]).map((sector) => [sector, 'received'])), status: normalized.length ? 'awaiting_split' : 'received', participantIds, previousItemId: itemId });
+      if (!normalized.length) queueEntries(transaction, getFirestore().collection('restaurants').doc(restaurantId), replacement.id, old.sectorsSnapshot || [old.sectorSnapshot], { sessionId, tableId: sessionDoc.data().tableId, orderId, name: old.nameSnapshot, quantity: old.quantity, notes: old.notes });
       const base = Math.floor(old.totalCents / participantIds.length);
       const remainder = old.totalCents % participantIds.length;
       participantIds.forEach((id, index) => {
@@ -292,8 +315,8 @@ exports.listWorkQueue = onCall(async (request) => {
   const { restaurantId, sector } = request.data || {};
   if (!validId(restaurantId) || !['bar', 'kitchen'].includes(sector)) throw new HttpsError('invalid-argument', 'Dados inválidos.');
   const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
-  const staff = await restaurant.collection('staff').doc(request.auth.uid).get();
-  if (!staff.exists || staff.data().active !== true || !Array.isArray(staff.data().roles) || !staff.data().roles.includes(sector)) throw new HttpsError('permission-denied', 'Sem permissão para este setor.');
+  const [staff, device] = await Promise.all([restaurant.collection('staff').doc(request.auth.uid).get(), restaurant.collection('devices').doc(request.auth.uid).get()]);
+  if (!permittedOperationalDevice(staff, device, sector)) throw new HttpsError('permission-denied', 'Sem permissão para este setor.');
   const queue = await restaurant.collection('workQueue').where('sector', '==', sector).where('status', 'in', ['received', 'in_preparation', 'ready']).limit(100).get();
   return { items: queue.docs.map((doc) => {
     const { sessionId, tableId, orderId, itemId, status, name, quantity, notes } = doc.data();
@@ -303,25 +326,30 @@ exports.listWorkQueue = onCall(async (request) => {
 
 exports.transitionItem = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
-  const { restaurantId, itemId, action } = request.data || {};
+  const { restaurantId, itemId, action, sector } = request.data || {};
   const transitions = { start: ['received', 'in_preparation'], ready: ['in_preparation', 'ready'], pickup: ['ready', 'picked_up'], deliver: ['picked_up', 'delivered'] };
   if (!validId(restaurantId) || !validId(itemId) || !Object.hasOwn(transitions, action)) throw new HttpsError('invalid-argument', 'Dados inválidos.');
   const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
-  const queue = restaurant.collection('workQueue').doc(itemId);
+  if (sector !== undefined && !['bar', 'kitchen'].includes(sector)) throw new HttpsError('invalid-argument', 'Setor inválido.');
+  const queue = restaurant.collection('workQueue').doc(sector ? `${itemId}--${sector}` : itemId);
+  const legacyQueue = restaurant.collection('workQueue').doc(itemId);
   const staff = restaurant.collection('staff').doc(request.auth.uid);
   return getFirestore().runTransaction(async (transaction) => {
-    const [staffDoc, entry] = await Promise.all([transaction.get(staff), transaction.get(queue)]);
-    if (!entry.exists) throw new HttpsError('not-found', 'Item não encontrado.');
+    const [staffDoc, deviceDoc, primary, legacy] = await Promise.all([transaction.get(staff), transaction.get(restaurant.collection('devices').doc(request.auth.uid)), transaction.get(queue), ...(sector ? [transaction.get(legacyQueue)] : [Promise.resolve(null)])]);
+    const entry = primary.exists ? primary : legacy;
+    if (!entry || !entry.exists || (sector && entry.data().sector !== sector)) throw new HttpsError('not-found', 'Item não encontrado.');
     const data = entry.data();
-    const roles = staffDoc.data()?.roles;
     const required = ['start', 'ready'].includes(action) ? data.sector : 'waiter';
-    if (!staffDoc.exists || staffDoc.data().active !== true || !Array.isArray(roles) || !roles.includes(required)) throw new HttpsError('permission-denied', 'Sem permissão para esta operação.');
+    if (!permittedOperationalDevice(staffDoc, deviceDoc, required)) throw new HttpsError('permission-denied', 'Sem permissão para esta operação.');
     const item = restaurant.collection('sessions').doc(data.sessionId).collection('orders').doc(data.orderId).collection('items').doc(itemId);
     const itemDoc = await transaction.get(item);
-    if (!itemDoc.exists || data.status !== transitions[action][0] || itemDoc.data().status !== data.status) throw new HttpsError('failed-precondition', 'Transição inválida.');
+    const sectorStatuses = itemDoc.data()?.sectorStatuses || { [data.sector]: itemDoc.data()?.status };
+    if (!itemDoc.exists || data.status !== transitions[action][0] || sectorStatuses[data.sector] !== data.status) throw new HttpsError('failed-precondition', 'Transição inválida.');
     const status = transitions[action][1];
-    transaction.update(queue, { status, updatedAt: FieldValue.serverTimestamp() });
-    transaction.update(item, { status, updatedAt: FieldValue.serverTimestamp() });
+    sectorStatuses[data.sector] = status;
+    const itemStatus = aggregateSectorStatus(sectorStatuses);
+    transaction.update(entry.ref, { status, updatedAt: FieldValue.serverTimestamp() });
+    transaction.update(item, { status: itemStatus, sectorStatuses, updatedAt: FieldValue.serverTimestamp() });
     transaction.create(restaurant.collection('sessions').doc(data.sessionId).collection('events').doc(), { action: `item_${status}`, actorId: request.auth.uid, targetId: itemId, occurredAt: FieldValue.serverTimestamp() });
     return { itemId, status };
   });
@@ -332,8 +360,8 @@ exports.listReadyItems = onCall(async (request) => {
   const { restaurantId } = request.data || {};
   if (!validId(restaurantId)) throw new HttpsError('invalid-argument', 'Restaurante inválido.');
   const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
-  const staff = await restaurant.collection('staff').doc(request.auth.uid).get();
-  if (!staff.exists || staff.data().active !== true || !Array.isArray(staff.data().roles) || !staff.data().roles.includes('waiter')) throw new HttpsError('permission-denied', 'Sem permissão de garçom.');
+  const [staff, device] = await Promise.all([restaurant.collection('staff').doc(request.auth.uid).get(), restaurant.collection('devices').doc(request.auth.uid).get()]);
+  if (!permittedOperationalDevice(staff, device, 'waiter')) throw new HttpsError('permission-denied', 'Sem permissão de garçom.');
   const queue = await restaurant.collection('workQueue').where('status', 'in', ['ready', 'picked_up']).limit(100).get();
   return { items: queue.docs.map((doc) => {
     const { sessionId, tableId, orderId, itemId, sector, status, name, quantity, notes } = doc.data();
@@ -343,22 +371,27 @@ exports.listReadyItems = onCall(async (request) => {
 
 exports.markItemUnavailable = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
-  const { restaurantId, itemId, reason } = request.data || {};
+  const { restaurantId, itemId, reason, sector } = request.data || {};
   if (!validId(restaurantId) || !validId(itemId) || typeof reason !== 'string' || !reason.trim() || reason.trim().length > 500) throw new HttpsError('invalid-argument', 'Informe um motivo válido.');
   const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
-  const queue = restaurant.collection('workQueue').doc(itemId);
+  if (sector !== undefined && !['bar', 'kitchen'].includes(sector)) throw new HttpsError('invalid-argument', 'Setor inválido.');
+  const queue = restaurant.collection('workQueue').doc(sector ? `${itemId}--${sector}` : itemId);
+  const legacyQueue = restaurant.collection('workQueue').doc(itemId);
   const staff = restaurant.collection('staff').doc(request.auth.uid);
   return getFirestore().runTransaction(async (transaction) => {
-    const [staffDoc, entry] = await Promise.all([transaction.get(staff), transaction.get(queue)]);
-    if (!entry.exists) throw new HttpsError('not-found', 'Item não encontrado.');
+    const [staffDoc, deviceDoc, primary, legacy] = await Promise.all([transaction.get(staff), transaction.get(restaurant.collection('devices').doc(request.auth.uid)), transaction.get(queue), ...(sector ? [transaction.get(legacyQueue)] : [Promise.resolve(null)])]);
+    const entry = primary.exists ? primary : legacy;
+    if (!entry || !entry.exists || (sector && entry.data().sector !== sector)) throw new HttpsError('not-found', 'Item não encontrado.');
     const data = entry.data();
-    if (!staffDoc.exists || staffDoc.data().active !== true || !Array.isArray(staffDoc.data().roles) || !staffDoc.data().roles.includes(data.sector)) throw new HttpsError('permission-denied', 'Sem permissão para este setor.');
+    if (!permittedOperationalDevice(staffDoc, deviceDoc, data.sector)) throw new HttpsError('permission-denied', 'Sem permissão para este setor.');
     const session = restaurant.collection('sessions').doc(data.sessionId);
     const item = session.collection('orders').doc(data.orderId).collection('items').doc(itemId);
     const itemDoc = await transaction.get(item);
-    if (!itemDoc.exists || !['received', 'in_preparation'].includes(data.status) || itemDoc.data().status !== data.status) throw new HttpsError('failed-precondition', 'Item não pode ser marcado indisponível.');
-    transaction.update(queue, { status: 'unavailable', updatedAt: FieldValue.serverTimestamp() });
-    transaction.update(item, { status: 'unavailable', unavailableReason: reason.trim(), updatedAt: FieldValue.serverTimestamp() });
+    const sectorStatuses = itemDoc.data()?.sectorStatuses || { [data.sector]: itemDoc.data()?.status };
+    if (!itemDoc.exists || !['received', 'in_preparation'].includes(data.status) || sectorStatuses[data.sector] !== data.status) throw new HttpsError('failed-precondition', 'Item não pode ser marcado indisponível.');
+    sectorStatuses[data.sector] = 'unavailable';
+    transaction.update(entry.ref, { status: 'unavailable', updatedAt: FieldValue.serverTimestamp() });
+    transaction.update(item, { status: aggregateSectorStatus(sectorStatuses), sectorStatuses, unavailableReason: reason.trim(), updatedAt: FieldValue.serverTimestamp() });
     transaction.create(session.collection('events').doc(), { action: 'item_unavailable', actorId: request.auth.uid, targetId: itemId, reason: reason.trim(), occurredAt: FieldValue.serverTimestamp() });
     return { itemId, status: 'unavailable' };
   });
@@ -378,7 +411,7 @@ exports.listMyOrderItems = onCall(async (request) => {
     const share = await item.ref.collection('shares').doc(request.auth.uid).get();
     if (!share.exists) return null;
     const data = item.data();
-    return { itemId: item.id, name: data.nameSnapshot, quantity: data.quantity, totalCents: data.totalCents, amountCents: share.data().amountCents, acceptanceStatus: share.data().acceptanceStatus, status: data.status, unavailableReason: data.unavailableReason || null };
+    return { itemId: item.id, name: data.nameSnapshot, quantity: data.quantity, totalCents: data.totalCents, amountCents: share.data().amountCents, acceptanceStatus: share.data().acceptanceStatus, status: data.status, sectorStatuses: data.sectorStatuses || null, unavailableReason: data.unavailableReason || null };
   }));
   return { items: visible.filter(Boolean) };
 });
@@ -411,9 +444,10 @@ exports.quoteCheckout = onCall(async (request) => {
     const items = await transaction.get(session.collection('orders').doc(ref.id).collection('items').limit(101));
     if (items.size > 100) throw new HttpsError('resource-exhausted', 'Pedido excede limite de consulta.');
     return Promise.all(items.docs.map(async (item) => {
-      if (!['received', 'in_preparation', 'ready', 'picked_up', 'delivered'].includes(item.data().status)) return 0;
       const share = await transaction.get(item.ref.collection('shares').doc(request.auth.uid));
       if (!share.exists || share.data().acceptanceStatus !== 'accepted') return 0;
+      if (item.data().status === 'attention_required') throw new HttpsError('failed-precondition', 'Item com indisponibilidade parcial requer revisão.');
+      if (!['received', 'in_preparation', 'ready', 'picked_up', 'delivered'].includes(item.data().status)) return 0;
       const amount = share.data().amountCents;
       if (!Number.isSafeInteger(amount) || amount < 0) throw new HttpsError('failed-precondition', 'Parcela inválida.');
       return amount;
@@ -615,4 +649,285 @@ exports.listSessionParticipants = onCall(async (request) => {
     if (participants.size > 100) throw new HttpsError('resource-exhausted', 'Muitos participantes; paginação necessária.');
     return { participants: participants.docs.map((doc) => ({ participantId: doc.id, displayName: doc.data().displayName })) };
   }, { readOnly: true });
+});
+
+// A identidade do administrador deve ser provisionada de forma confiável antes do uso.
+exports.saveAdminProduct = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const secondFactor = request.auth.token?.firebase?.sign_in_second_factor;
+  if (typeof secondFactor !== 'string' || !secondFactor) throw new HttpsError('permission-denied', 'Autenticação em duas etapas necessária.');
+  const { restaurantId, productId, name, description = '', priceCents, sectors, available, photoUrl = '' } = request.data || {};
+  if (![restaurantId, productId].every(validId) || typeof name !== 'string' || !name.trim() || name.trim().length > 120 || typeof description !== 'string' || description.length > 1000 || !Number.isSafeInteger(priceCents) || priceCents < 0 || !productSectors({ sectors }) || typeof available !== 'boolean' || typeof photoUrl !== 'string' || photoUrl.length > 2048) throw new HttpsError('invalid-argument', 'Produto inválido.');
+  if (photoUrl) {
+    try { const url = new URL(photoUrl); if (url.protocol !== 'https:' || url.username || url.password) throw new Error(); }
+    catch { throw new HttpsError('invalid-argument', 'URL da foto deve usar HTTPS.'); }
+  }
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const product = restaurant.collection('menuItems').doc(productId);
+  return getFirestore().runTransaction(async (transaction) => {
+    const [membership, restaurantDoc] = await Promise.all([
+      transaction.get(restaurant.collection('admins').doc(request.auth.uid)), transaction.get(restaurant)
+    ]);
+    if (!membership.exists || membership.data().active !== true || !restaurantDoc.exists) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    transaction.set(product, { name: name.trim(), description: description.trim(), priceCents, sectors: productSectors({ sectors }), available, photoUrl, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    transaction.create(restaurant.collection('adminEvents').doc(), { action: 'product_saved', actorId: request.auth.uid, targetId: productId, occurredAt: FieldValue.serverTimestamp() });
+    return { productId };
+  });
+});
+
+function staffCodeDigest(restaurantId, code) {
+  const pepper = process.env.STAFF_CODE_PEPPER;
+  if (typeof pepper !== 'string' || pepper.length < 32) throw new HttpsError('failed-precondition', 'Configuração segura dos códigos ausente.');
+  return require('node:crypto').createHmac('sha256', pepper).update(JSON.stringify([restaurantId, code])).digest('hex');
+}
+function requireAdminSecondFactor(request) {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const factor = request.auth.token?.firebase?.sign_in_second_factor;
+  if (typeof factor !== 'string' || !factor) throw new HttpsError('permission-denied', 'Autenticação em duas etapas necessária.');
+}
+exports.createEmployeeCode = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId, employeeId, displayName, role } = request.data || {};
+  if (![restaurantId, employeeId].every(validId) || typeof displayName !== 'string' || !displayName.trim() || displayName.trim().length > 120 || !['waiter', 'manager'].includes(role)) throw new HttpsError('invalid-argument', 'Dados de funcionário inválidos.');
+  const code = String(require('node:crypto').randomInt(0, 100000000)).padStart(8, '0');
+  const digest = staffCodeDigest(restaurantId, code);
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const employee = restaurant.collection('employees').doc(employeeId);
+  const index = restaurant.collection('employeeCodeIndex').doc(digest);
+  await getFirestore().runTransaction(async (tx) => {
+    const [admin, establishment, existing, collision] = await Promise.all([
+      tx.get(restaurant.collection('admins').doc(request.auth.uid)), tx.get(restaurant), tx.get(employee), tx.get(index)
+    ]);
+    if (!admin.exists || admin.data().active !== true || !establishment.exists) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    if (existing.exists) throw new HttpsError('already-exists', 'Funcionário já cadastrado.');
+    if (collision.exists) throw new HttpsError('aborted', 'Não foi possível gerar o código; tente novamente.');
+    tx.create(employee, { displayName: displayName.trim(), role, active: true, codeDigest: digest, createdAt: FieldValue.serverTimestamp() });
+    tx.create(index, { employeeId, active: true });
+    tx.create(restaurant.collection('adminEvents').doc(), { action: 'employee_created', actorId: request.auth.uid, targetId: employeeId, occurredAt: FieldValue.serverTimestamp() });
+  });
+  // O código é devolvido apenas uma vez. Nunca armazená-lo ou registrá-lo em logs.
+  return { employeeId, code };
+});
+
+exports.disableEmployeeCode = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId, employeeId } = request.data || {};
+  if (![restaurantId, employeeId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const employee = restaurant.collection('employees').doc(employeeId);
+  return getFirestore().runTransaction(async (tx) => {
+    const [admin, existing] = await Promise.all([tx.get(restaurant.collection('admins').doc(request.auth.uid)), tx.get(employee)]);
+    if (!admin.exists || admin.data().active !== true) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    if (!existing.exists) throw new HttpsError('not-found', 'Funcionário não encontrado.');
+    if (existing.data().active !== true) return { employeeId, active: false };
+    const digest = existing.data().codeDigest;
+    if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) throw new HttpsError('failed-precondition', 'Registro de código inválido.');
+    tx.update(employee, { active: false, disabledAt: FieldValue.serverTimestamp() });
+    tx.update(restaurant.collection('employeeCodeIndex').doc(digest), { active: false });
+    tx.create(restaurant.collection('adminEvents').doc(), { action: 'employee_disabled', actorId: request.auth.uid, targetId: employeeId, occurredAt: FieldValue.serverTimestamp() });
+    return { employeeId, active: false };
+  });
+});
+
+exports.listAdminProducts = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId } = request.data || {};
+  if (!validId(restaurantId)) throw new HttpsError('invalid-argument', 'Restaurante inválido.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  return getFirestore().runTransaction(async (tx) => {
+    const admin = await tx.get(restaurant.collection('admins').doc(request.auth.uid));
+    if (!admin.exists || admin.data().active !== true) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    const products = await tx.get(restaurant.collection('menuItems').limit(101));
+    if (products.size > 100) throw new HttpsError('resource-exhausted', 'Muitos produtos; paginação necessária.');
+    return { products: products.docs.map((doc) => {
+      const data = doc.data();
+      return { productId: doc.id, name: data.name, description: data.description || '', priceCents: data.priceCents, sectors: productSectors(data), available: data.available === true, photoUrl: data.photoUrl || '' };
+    }) };
+  }, { readOnly: true });
+});
+
+exports.listAdminEmployees = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId } = request.data || {};
+  if (!validId(restaurantId)) throw new HttpsError('invalid-argument', 'Restaurante inválido.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  return getFirestore().runTransaction(async (tx) => {
+    const admin = await tx.get(restaurant.collection('admins').doc(request.auth.uid));
+    if (!admin.exists || admin.data().active !== true) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    const employees = await tx.get(restaurant.collection('employees').limit(101));
+    if (employees.size > 100) throw new HttpsError('resource-exhausted', 'Muitos funcionários; paginação necessária.');
+    return { employees: employees.docs.map((doc) => ({ employeeId: doc.id, displayName: doc.data().displayName, role: doc.data().role, active: doc.data().active === true })) };
+  }, { readOnly: true });
+});
+
+// Tentações inválidas são contabilizadas na transação antes de retornar erro.
+async function readEmployeeAuthorization(tx, restaurant, code) {
+  if (typeof code !== 'string' || !/^\d{8}$/.test(code)) throw new HttpsError('invalid-argument', 'Código deve ter oito dígitos.');
+  const now = Date.now();
+  const digest = staffCodeDigest(restaurant.id, code);
+  const limit = restaurant.collection('security').doc('employeeCodeAttempts');
+  const [limitDoc, index] = await Promise.all([tx.get(limit), tx.get(restaurant.collection('employeeCodeIndex').doc(digest))]);
+  const previous = limitDoc.data() || {};
+  const withinWindow = Number.isSafeInteger(previous.windowStartMs) && now >= previous.windowStartMs && now - previous.windowStartMs < 300000;
+  const count = withinWindow && Number.isSafeInteger(previous.failures) ? previous.failures : 0;
+  if (count >= 10) throw new HttpsError('resource-exhausted', 'Muitas tentativas. Tente mais tarde.');
+  let employee = null;
+  if (index.exists && index.data().active === true && validId(index.data().employeeId)) {
+    employee = await tx.get(restaurant.collection('employees').doc(index.data().employeeId));
+  }
+  return { now, limit, windowStartMs: withinWindow ? previous.windowStartMs : now, count, employee, digest, index };
+}
+function employeeAllowed(auth, roles) {
+  return auth.employee?.exists && auth.employee.data().active === true && auth.employee.data().codeDigest === auth.digest && roles.includes(auth.employee.data().role);
+}
+function recordInvalidCode(tx, auth) {
+  tx.set(auth.limit, { windowStartMs: auth.windowStartMs, failures: auth.count + 1 });
+}
+function activeDevice(doc, screen, now) {
+  return doc.exists && doc.data().active === true && doc.data().screen === screen && Number.isSafeInteger(doc.data().expiresAtMs) && doc.data().expiresAtMs > now;
+}
+function permittedOperationalDevice(staff, device, role) {
+  const screen = role === 'waiter' ? 'plaza' : role;
+  if (activeDevice(device, screen, Date.now())) return true;
+  return process.env.FUNCTIONS_EMULATOR === 'true' && staff.exists && staff.data().active === true && Array.isArray(staff.data().roles) && staff.data().roles.includes(role);
+}
+
+exports.activateSharedDevice = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, screen, code } = request.data || {};
+  if (!validId(restaurantId) || !['plaza', 'bar', 'kitchen'].includes(screen)) throw new HttpsError('invalid-argument', 'Dados inválidos.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const result = await getFirestore().runTransaction(async (tx) => {
+    const authorization = await readEmployeeAuthorization(tx, restaurant, code);
+    if (!employeeAllowed(authorization, ['manager'])) { recordInvalidCode(tx, authorization); return { denied: true }; }
+    const device = restaurant.collection('devices').doc(request.auth.uid);
+    tx.set(device, { active: true, screen, activatedBy: authorization.employee.id, expiresAtMs: authorization.now + 12 * 60 * 60 * 1000, activatedAt: FieldValue.serverTimestamp() });
+    tx.create(restaurant.collection('adminEvents').doc(), { action: 'device_activated', actorId: authorization.employee.id, targetId: request.auth.uid, screen, occurredAt: FieldValue.serverTimestamp() });
+    return { screen, expiresAtMs: authorization.now + 12 * 60 * 60 * 1000 };
+  });
+  if (result.denied) throw new HttpsError('permission-denied', 'Código não autorizado.');
+  return result;
+});
+
+exports.openTableWithCode = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, tableId, requestId, code } = request.data || {};
+  if (![restaurantId, tableId, requestId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const device = restaurant.collection('devices').doc(request.auth.uid);
+  const table = restaurant.collection('tables').doc(tableId);
+  const session = restaurant.collection('sessions').doc();
+  const key = createHash('sha256').update(JSON.stringify([request.auth.uid, requestId])).digest('hex');
+  const operation = restaurant.collection('sessionOpenRequests').doc(key);
+  const result = await getFirestore().runTransaction(async (tx) => {
+    const authorization = await readEmployeeAuthorization(tx, restaurant, code);
+    const [deviceDoc, tableDoc, prior] = await Promise.all([tx.get(device), tx.get(table), tx.get(operation)]);
+    if (!activeDevice(deviceDoc, 'plaza', authorization.now)) throw new HttpsError('permission-denied', 'Dispositivo da praça não autorizado.');
+    if (!employeeAllowed(authorization, ['waiter', 'manager'])) { recordInvalidCode(tx, authorization); return { denied: true }; }
+    const actorId = authorization.employee.id;
+    if (prior.exists) {
+      if (prior.data().tableId !== tableId || prior.data().employeeId !== actorId) throw new HttpsError('already-exists', 'Identificador já utilizado.');
+      return { sessionId: prior.data().sessionId, tableId, status: 'open' };
+    }
+    if (!tableDoc.exists) throw new HttpsError('not-found', 'Mesa não encontrada.');
+    if (tableDoc.data().activeSessionId) throw new HttpsError('failed-precondition', 'Mesa já possui sessão ativa.');
+    tx.create(session, { tableId, status: 'open', openedAt: FieldValue.serverTimestamp(), openedByEmployeeId: actorId });
+    tx.update(table, { activeSessionId: session.id });
+    tx.create(operation, { tableId, employeeId: actorId, sessionId: session.id, createdAt: FieldValue.serverTimestamp() });
+    tx.create(session.collection('events').doc(), { action: 'session_opened', actorId, actorType: 'employee', occurredAt: FieldValue.serverTimestamp() });
+    return { sessionId: session.id, tableId, status: 'open' };
+  });
+  if (result.denied) throw new HttpsError('permission-denied', 'Código não autorizado.');
+  return result;
+});
+
+exports.cancelItemWithCode = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, sessionId, orderId, itemId, code, reason } = request.data || {};
+  if (![restaurantId, sessionId, orderId, itemId].every(validId) || typeof reason !== 'string' || !reason.trim() || reason.trim().length > 500) throw new HttpsError('invalid-argument', 'Dados ou motivo inválidos.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const session = restaurant.collection('sessions').doc(sessionId);
+  const item = session.collection('orders').doc(orderId).collection('items').doc(itemId);
+  const result = await getFirestore().runTransaction(async (tx) => {
+    const authorization = await readEmployeeAuthorization(tx, restaurant, code);
+    const [device, sessionDoc, itemDoc] = await Promise.all([tx.get(restaurant.collection('devices').doc(request.auth.uid)), tx.get(session), tx.get(item)]);
+    if (!activeDevice(device, 'plaza', authorization.now)) throw new HttpsError('permission-denied', 'Dispositivo da praça não autorizado.');
+    if (!employeeAllowed(authorization, ['waiter', 'manager'])) { recordInvalidCode(tx, authorization); return { denied: true }; }
+    if (!sessionDoc.exists || sessionDoc.data().status !== 'open' || !itemDoc.exists) throw new HttpsError('failed-precondition', 'Sessão ou item inválido.');
+    const data = itemDoc.data();
+    const statuses = data.sectorStatuses || { [data.sectorSnapshot]: data.status };
+    const started = Object.values(statuses).some((status) => ['in_preparation', 'ready', 'picked_up', 'delivered', 'unavailable'].includes(status));
+    if (started && authorization.employee.data().role !== 'manager') throw new HttpsError('permission-denied', 'Somente gerente pode cancelar após o início do preparo.');
+    if (data.status === 'cancelled') return { itemId, status: 'cancelled' };
+    if (!['awaiting_split', 'split_rejected', 'received', 'in_preparation', 'ready', 'picked_up', 'delivered', 'attention_required'].includes(data.status) || !Array.isArray(data.participantIds) || data.participantIds.some((id) => !validId(id))) throw new HttpsError('failed-precondition', 'Item não pode ser cancelado.');
+    const sectors = data.sectorsSnapshot || [data.sectorSnapshot];
+    if (!productSectors({ sectors })) throw new HttpsError('failed-precondition', 'Setores inválidos.');
+    const [people, invitations, queues] = await Promise.all([
+      Promise.all(data.participantIds.map((id) => tx.get(session.collection('participants').doc(id)))),
+      Promise.all(data.participantIds.map((id) => tx.get(session.collection('participants').doc(id).collection('invitations').doc(itemId)))),
+      Promise.all(sectors.map((sector) => tx.get(restaurant.collection('workQueue').doc(queueId(itemId, sector, sectors)))))
+    ]);
+    if (people.some((person) => !person.exists || person.data().status !== 'active')) throw new HttpsError('failed-precondition', 'Comanda indisponível ou pagamento em andamento; revise com o gestor.');
+    for (const invitation of invitations) if (invitation.exists && invitation.data().acceptanceStatus === 'pending') tx.update(invitation.ref, { acceptanceStatus: 'cancelled' });
+    for (const queue of queues) if (queue.exists) tx.update(queue.ref, { status: 'cancelled', updatedAt: FieldValue.serverTimestamp() });
+    tx.update(item, { status: 'cancelled', cancellationReason: reason.trim(), cancelledAt: FieldValue.serverTimestamp(), cancelledByEmployeeId: authorization.employee.id });
+    tx.create(session.collection('events').doc(), { action: 'item_cancelled', actorId: authorization.employee.id, actorType: 'employee', targetId: itemId, reason: reason.trim(), occurredAt: FieldValue.serverTimestamp() });
+    return { itemId, status: 'cancelled' };
+  });
+  if (result.denied) throw new HttpsError('permission-denied', 'Código não autorizado.');
+  return result;
+});
+
+exports.rotateEmployeeCode = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId, employeeId } = request.data || {};
+  if (![restaurantId, employeeId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const code = String(require('node:crypto').randomInt(0, 100000000)).padStart(8, '0');
+  const digest = staffCodeDigest(restaurantId, code);
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const employee = restaurant.collection('employees').doc(employeeId);
+  await getFirestore().runTransaction(async (tx) => {
+    const [admin, existing, collision] = await Promise.all([tx.get(restaurant.collection('admins').doc(request.auth.uid)), tx.get(employee), tx.get(restaurant.collection('employeeCodeIndex').doc(digest))]);
+    if (!admin.exists || admin.data().active !== true) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    if (!existing.exists || existing.data().active !== true) throw new HttpsError('failed-precondition', 'Funcionário ausente ou desativado.');
+    if (collision.exists) throw new HttpsError('aborted', 'Não foi possível gerar o código; tente novamente.');
+    const oldDigest = existing.data().codeDigest;
+    if (typeof oldDigest !== 'string' || !/^[a-f0-9]{64}$/.test(oldDigest)) throw new HttpsError('failed-precondition', 'Registro de código inválido.');
+    tx.update(restaurant.collection('employeeCodeIndex').doc(oldDigest), { active: false });
+    tx.create(restaurant.collection('employeeCodeIndex').doc(digest), { employeeId, active: true });
+    tx.update(employee, { codeDigest: digest, codeRotatedAt: FieldValue.serverTimestamp() });
+    tx.create(restaurant.collection('adminEvents').doc(), { action: 'employee_code_rotated', actorId: request.auth.uid, targetId: employeeId, occurredAt: FieldValue.serverTimestamp() });
+  });
+  return { employeeId, code };
+});
+
+exports.listAdminDevices = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId } = request.data || {};
+  if (!validId(restaurantId)) throw new HttpsError('invalid-argument', 'Restaurante inválido.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  return getFirestore().runTransaction(async (tx) => {
+    const admin = await tx.get(restaurant.collection('admins').doc(request.auth.uid));
+    if (!admin.exists || admin.data().active !== true) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    const devices = await tx.get(restaurant.collection('devices').limit(101));
+    if (devices.size > 100) throw new HttpsError('resource-exhausted', 'Muitos dispositivos; paginação necessária.');
+    return { devices: devices.docs.map((doc) => ({ deviceId: doc.id, screen: doc.data().screen, active: doc.data().active === true, expiresAtMs: doc.data().expiresAtMs })) };
+  }, { readOnly: true });
+});
+exports.disableSharedDevice = onCall(async (request) => {
+  requireAdminSecondFactor(request);
+  const { restaurantId, deviceId } = request.data || {};
+  if (![restaurantId, deviceId].every(validId)) throw new HttpsError('invalid-argument', 'IDs inválidos.');
+  const restaurant = getFirestore().collection('restaurants').doc(restaurantId);
+  const device = restaurant.collection('devices').doc(deviceId);
+  return getFirestore().runTransaction(async (tx) => {
+    const [admin, existing] = await Promise.all([tx.get(restaurant.collection('admins').doc(request.auth.uid)), tx.get(device)]);
+    if (!admin.exists || admin.data().active !== true) throw new HttpsError('permission-denied', 'Sem permissão administrativa.');
+    if (!existing.exists) throw new HttpsError('not-found', 'Dispositivo não encontrado.');
+    if (existing.data().active === true) {
+      tx.update(device, { active: false, disabledAt: FieldValue.serverTimestamp() });
+      tx.create(restaurant.collection('adminEvents').doc(), { action: 'device_disabled', actorId: request.auth.uid, targetId: deviceId, occurredAt: FieldValue.serverTimestamp() });
+    }
+    return { deviceId, active: false };
+  });
 });

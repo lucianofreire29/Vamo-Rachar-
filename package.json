@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "emulators": "firebase emulators:start --project demo-vamo-rachar",
-    "test:emulators": "firebase emulators:exec --project demo-vamo-rachar --only auth,firestore,functions \"node scripts/smoke-test.cjs && node scripts/rules-test.cjs && node scripts/session-test.cjs && node scripts/full-flow-test.cjs && node scripts/http-api-test.cjs\"",
+    "test:emulators": "firebase emulators:exec --project demo-vamo-rachar --only auth,firestore,functions \"node scripts/smoke-test.cjs && node scripts/rules-test.cjs && node scripts/session-test.cjs && node scripts/full-flow-test.cjs && node scripts/http-api-test.cjs && node scripts/seed-test.cjs && node scripts/multi-sector-test.cjs\"",
     "check": "npm --prefix functions run check"
   },
   "devDependencies": {
