@@ -116,8 +116,8 @@ Não implementar cobrança real nem integração com PDV nesta fase. Escolha de 
 
 ## 7. Qualidade técnica e segurança a evoluir
 
-- [ ] Separar domínio, persistência Firebase e transportes HTTP/emulador; reduzir o acoplamento a `firebase-functions`.
-- [ ] Centralizar esquemas de entrada, erros, estados e papéis, preservando validações de autorização em cada operação.
+- [x] Separar domínio, persistência Firebase e transportes HTTP (`config/`, `middlewares/`, `routes/`, `controllers/` e `services/`).
+- [x] Centralizar esquemas de entrada, erros, estados e papéis (`utils/validators.js` e `middlewares/error.middleware.js`).
 - [ ] Testar JSON com tipos inesperados, campos desconhecidos e limites de payload.
 - [ ] Implementar limites de requisição e proteção contra criação abusiva de participantes/pedidos.
 - [ ] Adicionar logs estruturados e identificação de requisição, sem tokens, chaves ou conteúdo de comprovantes.
