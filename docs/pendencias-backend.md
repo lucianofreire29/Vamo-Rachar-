@@ -125,7 +125,7 @@ Não implementar cobrança real nem integração com PDV nesta fase. Escolha de 
 - [ ] Confirmar privilégios mínimos da conta de serviço e procedimento de rotação/revogação da chave.
 - [ ] Medir leituras, tempo e contenção das consultas/transações; otimizar projeções conforme dados de teste.
 - [ ] Ampliar testes de concorrência, isolamento, falhas e limites, inclusive ausência de exposição dos endpoints simulados.
-- [ ] Criar contrato de API consolidado (por exemplo OpenAPI), exemplos e instruções de autenticação para as futuras telas.
+- [x] Criar contrato de API consolidado (por exemplo OpenAPI), exemplos e instruções de autenticação para as futuras telas.
 - [ ] Definir publicação e rollback: branch de teste → Actions aprovado → main → deploy → teste autenticado na nuvem.
 
 ## 8. Depois da prototipação

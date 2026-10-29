@@ -7,7 +7,7 @@ const operations = [
   'openTableSession', 'joinTable', 'listMenu', 'createOrder', 'respondToShare',
   'getShare', 'listInvitations', 'resolveRejectedSplit', 'listWorkQueue',
   'transitionItem', 'listReadyItems', 'markItemUnavailable', 'listMyOrderItems',
-  'listMyOrders', 'quoteCheckout', 'listSessionParticipants'
+  'listMyOrders', 'quoteCheckout', 'listSessionParticipants', 'requestAssistance'
 ];
 const statusCodes = {
   'invalid-argument': 400, 'failed-precondition': 400, unauthenticated: 401,

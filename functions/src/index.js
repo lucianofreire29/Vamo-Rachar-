@@ -616,3 +616,83 @@ exports.listSessionParticipants = onCall(async (request) => {
     return { participants: participants.docs.map((doc) => ({ participantId: doc.id, displayName: doc.data().displayName })) };
   }, { readOnly: true });
 });
+
+exports.requestAssistance = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Autenticação necessária.');
+  const { restaurantId, sessionId, requestId, reason } = request.data || {};
+  if (
+    ![restaurantId, sessionId, requestId].every(validId) ||
+    typeof reason !== 'string' ||
+    !reason.trim() ||
+    reason.trim().length > 200
+  ) {
+    throw new HttpsError('invalid-argument', 'Dados de solicitação inválidos.');
+  }
+
+  const normalizedReason = reason.trim();
+  const db = getFirestore();
+  const restaurant = db.collection('restaurants').doc(restaurantId);
+  const session = restaurant.collection('sessions').doc(sessionId);
+  const participant = session.collection('participants').doc(request.auth.uid);
+  const key = createHash('sha256').update(JSON.stringify([request.auth.uid, requestId])).digest('hex');
+  const operation = session.collection('assistanceRequestsLog').doc(key);
+  const assistance = session.collection('assistanceRequests').doc();
+
+  return db.runTransaction(async (tx) => {
+    const [sessionDoc, participantDoc, prior] = await Promise.all([
+      tx.get(session),
+      tx.get(participant),
+      tx.get(operation)
+    ]);
+
+    if (
+      !sessionDoc.exists ||
+      sessionDoc.data().status !== 'open' ||
+      !participantDoc.exists ||
+      participantDoc.data().status !== 'active' ||
+      participantDoc.data().authUid !== request.auth.uid
+    ) {
+      throw new HttpsError('permission-denied', 'Participante sem acesso à sessão.');
+    }
+
+    if (prior.exists) {
+      if (prior.data().reason !== normalizedReason) {
+        throw new HttpsError('already-exists', 'Identificador já utilizado para outro chamado.');
+      }
+      return {
+        assistanceId: prior.data().assistanceId,
+        status: 'received',
+        tableId: sessionDoc.data().tableId
+      };
+    }
+
+    tx.create(assistance, {
+      participantId: request.auth.uid,
+      displayName: participantDoc.data().displayName,
+      tableId: sessionDoc.data().tableId,
+      reason: normalizedReason,
+      status: 'received',
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    tx.create(operation, {
+      assistanceId: assistance.id,
+      reason: normalizedReason,
+      createdAt: FieldValue.serverTimestamp()
+    });
+
+    tx.create(session.collection('events').doc(), {
+      action: 'assistance_requested',
+      actorId: request.auth.uid,
+      targetId: assistance.id,
+      reason: normalizedReason,
+      occurredAt: FieldValue.serverTimestamp()
+    });
+
+    return {
+      assistanceId: assistance.id,
+      status: 'received',
+      tableId: sessionDoc.data().tableId
+    };
+  });
+});
