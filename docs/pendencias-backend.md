@@ -42,10 +42,10 @@ A API no Render ainda reutiliza handlers de Cloud Functions via `.run`. Não exi
 
 ### 3.2 Teste pela rede
 
-- [ ] Preparar comandos ou coleção de cliente de API para as operações publicadas, com token em memória e sem logs de credenciais.
-- [ ] Testar falta de token, token inválido, papel errado e isolamento entre restaurantes na API publicada.
-- [ ] Verificar o comportamento após repouso do Render, expiração do token, perda de conexão e repetição de requisição.
-- [ ] Não interpretar `/health` como teste de acesso ao banco: ele verifica apenas o servidor.
+- [x] Preparar comandos ou coleção de cliente de API para as operações publicadas, com token em memória e sem logs de credenciais (`scripts/network-security-test.cjs`).
+- [x] Testar falta de token, token inválido, papel errado e isolamento entre restaurantes na API publicada.
+- [x] Verificar o comportamento após repouso do Render, expiração do token, perda de conexão e repetição de requisição.
+- [x] Não interpretar `/health` como teste de acesso ao banco: ele verifica apenas o servidor.
 
 ## 4. Prioridade 2 — completar o protótipo funcional
 

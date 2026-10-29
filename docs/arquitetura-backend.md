@@ -28,3 +28,10 @@ O script `scripts/seed-prototipo.cjs` prepara o ambiente de forma idempotente (s
 - **Identidade da Equipe (`staff/staff-gerente-demo`)**: Conta persistente no Firebase Auth (`equipe@vamorachar.demo`), separada da autenticação anônima dos clientes. Vínculo administrativo com `{ active: boolean, roles: string[] }`.
 - **Cardápio (`menuItems/{id}`)**: `{ name: string, description: string, priceCents: number (int), sector: 'kitchen' | 'bar', available: boolean }`. Inclui `fries` (3600), `burger` (3200) e `lemonade` (1000).
 - **Mesas e Sessão (`tables/mesa-13`)**: Cria `mesa-01` a `mesa-20` e garante uma sessão aberta (`sessao-mesa-13-ativa`) vinculada em `activeSessionId`.
+
+## Verificação de Rede e Segurança da API (`scripts/network-security-test.cjs`)
+
+- **Token em Memória**: O cliente de testes armazena o Bearer Token exclusivamente em variável de escopo local, sem exibir credenciais ou tokens nos logs.
+- **Isolamento e Papéis**: Valida recusas HTTP `401` (ausência de token ou token inválido/expirado) e `403` (funcionário com papel incompatível com o setor ou tentativa de acesso cruzado entre restaurantes distintos).
+- **Idempotência e Rede**: Valida a repetição segura de `requestId` em `openTableSession` e `createOrder` (`200` para payload idêntico e `409` para reutilização indevida), preflight de CORS (`204`) e tratamento de interrupção de conexão.
+- **Saúde vs. Banco de Dados**: Separa a verificação superficial do servidor (`GET /health`) das operações reais de leitura e escrita autenticadas no Firestore (`joinTable`, `listMenu` e `createOrder`).
